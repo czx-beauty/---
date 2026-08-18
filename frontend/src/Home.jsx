@@ -80,26 +80,36 @@ export default function Home({ user, onLogout }) {
       .catch(() => {});
   }, []);
 
-  // 首页 → 推荐 API；其他视图 → 电影 API
+  // 数据加载：搜索词优先（任何视图下搜索都生效）；无搜索词时首页走推荐，其他视图走列表
   useEffect(() => {
     let cancelled = false;
-    if (activeNav === '首页') {
-      setLoading(true); setError('');
-      fetchRecommendations(20)
-        .then((data) => { if (!cancelled) { setRecs(data); setLoading(false); } })
-        .catch((e) => { if (!cancelled) { setError(e.message); setLoading(false); } });
-    } else {
-      setLoading(true); setError('');
-      fetchMovies({ q: query, pageSize: 50 })
-        .then((data) => { if (!cancelled) { setMovies(data.items); setTotal(data.total); setLoading(false); } })
-        .catch((e) => { if (!cancelled) { setError(e.message); setLoading(false); } });
-    }
+    setLoading(true); setError('');
+    const load = () => {
+      if (query.trim()) {
+        // 有搜索词 → 全局搜索电影（覆盖当前视图）
+        return fetchMovies({ q: query, pageSize: 50 })
+          .then((data) => { if (!cancelled) { setMovies(data.items); setTotal(data.total); } });
+      }
+      if (activeNav === '首页') {
+        return fetchRecommendations(20)
+          .then((data) => { if (!cancelled) setRecs(data); });
+      }
+      return fetchMovies({ pageSize: 50 })
+        .then((data) => { if (!cancelled) { setMovies(data.items); setTotal(data.total); } });
+    };
+    load()
+      .catch((e) => { if (!cancelled) setError(e.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [query, activeNav]);
 
-  const viewList = activeNav === '热门'
-    ? [...movies].sort((a, b) => (b.avg_rating ?? 0) - (a.avg_rating ?? 0))
-    : activeNav === '首页' ? recs : movies;
+  // 展示列表：搜索时用搜索结果；首页无搜索时用推荐；热门按评分排序
+  const isSearching = query.trim() !== '';
+  const viewList = isSearching
+    ? movies
+    : activeNav === '热门'
+      ? [...movies].sort((a, b) => (b.avg_rating ?? 0) - (a.avg_rating ?? 0))
+      : activeNav === '首页' ? recs : movies;
 
   // ---------- 互动状态（真实后端持久化） ----------
   const [liked, setLiked] = useState([]);
@@ -242,21 +252,21 @@ export default function Home({ user, onLogout }) {
       {/* ===== 主内容区 ===== */}
       <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         {activeNav !== '设置' && (
-          <div style={{ padding: '14px 28px', borderBottom: `1px solid ${colors.border}`, background: colors.panel }}>
+          <div style={{ padding: '14px 28px', borderBottom: `1px solid ${colors.border}`, background: colors.panel, display: 'flex', justifyContent: 'center' }}>
             <input value={query} onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索电影或类型（实时查后端）"
+              placeholder="搜索电影或类型"
               style={{
-                width: '100%', maxWidth: 420, background: colors.bg, color: colors.text,
+                width: '100%', maxWidth: 480, background: colors.bg, color: colors.text,
                 border: `1px solid ${colors.border}`, borderRadius: 8, padding: '9px 14px', fontSize: 14, outline: 'none',
               }} />
           </div>
         )}
 
         <div style={{ padding: '20px 28px 8px' }}>
-          <h1 style={{ fontSize: 22, margin: 0 }}>{activeNav === '首页' ? '为你推荐' : activeNav}</h1>
+          <h1 style={{ fontSize: 22, margin: 0 }}>{isSearching ? '搜索结果' : activeNav === '首页' ? '为你推荐' : activeNav}</h1>
           {activeNav !== '设置' && (
             <p style={{ fontSize: 12, color: colors.sub, margin: '6px 0 0' }}>
-              {loading ? '加载中…' : error ? `加载失败：${error}` : activeNav === '首页' ? `个性化推荐（基于你的互动，每 5 分钟更新）` : `共 ${total} 部`}
+              {loading ? '加载中…' : error ? `加载失败：${error}` : isSearching ? `找到 ${total} 部匹配「${query}」` : activeNav === '首页' ? `个性化推荐（基于你的互动，每 5 分钟更新）` : `共 ${total} 部`}
             </p>
           )}
         </div>
