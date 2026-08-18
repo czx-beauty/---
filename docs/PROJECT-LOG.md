@@ -315,3 +315,29 @@ app/engine/
 3. 点喜欢《黑客帝国》《终结者2》✅
 4. 重算 → 推荐变成星战V/终结者1984/拯救大兵瑞恩 ✅
 5. **闭环达成：点击学习 → 定时重算 → 推荐更新**（用户最初的需求！）
+
+### T10 收尾——项目完成 🎉
+
+**完成内容**：
+- README.md：架构图 + 快速开始 + 技术栈 + 学习路径映射
+- 全部 10 张 ticket 完成：T1 前端基建 → T2 首页 → T3 后端骨架 → T4 认证 → T5 电影 API → T6 行为事件 → T7 推荐引擎 → T8 定时重算 → T9 全链路联调 → T10 文档
+- GitHub 仓库：github.com/czx-beauty/czx-beauty（main + prototype/ui-variants 双分支）
+
+**项目最终形态**：
+- 前端：React 18 + Vite，登录/注册 + 五视图首页 + 双主题 + 互动星级
+- 后端：FastAPI 分层架构，5 张表，JWT 认证，ItemCF 推荐引擎（可替换接口）
+- 数据：MovieLens ml-latest-small（9742 电影 / 48580 喜欢信号）
+- 推荐：点击学习 → APScheduler 每 5 分钟重算 → rec_cache 缓存读取
+
+**开发过程沉淀（本日志）**：
+- 16+ 个用户疑问解答（Q1~Q16）
+- 6 个真实踩坑：Star 组件崩溃 / N+1 查询 / CORS / useEffect 竞态 / passlib+bcrypt 不兼容 / 冷门电影相似度噪声
+- 4 个 ADR 架构决策
+- 教学要点贯穿每个阶段
+
+**常大人可以继续的扩展方向**（项目结构已预留）：
+1. 换推荐引擎：实现 `RecommendationEngine` 接口 → 向量召回（Word2Vec+FAISS）或双塔模型
+2. 后端加测试：pytest + FastAPI TestClient（当前无测试，可补）
+3. 部署上线：Docker + 腾讯云（README 已备启动步骤）
+4. 前端加详情页/分页加载
+5. 生产化：Alembic 迁移、环境变量密钥、HTTPS
