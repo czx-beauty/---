@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { fetchMovies } from './api';
-import { user } from './mockData';
+import { deleteEvents, fetchMovies, fetchMyEvents, fetchRecommendations, fetchMe, postEvent } from './api';
 
 // ============================================================
-// 电影推荐 — 正式首页（真实后端数据版）
-// 互动机制：喜欢+1.0(1次可取消) 收藏+0.5(1次可取消)
-//           点赞+0.5/次(可连续累积，点「已赞N」归零) 差评-0.5/次(同上)
-// 数据：/api/movies（Vite 代理到后端 8000）
+// 电影推荐 — 正式首页（全链路：真实后端数据 + 互动持久化）
+// 互动机制：like+1.0(1次) fav+0.5(1次) thumbs_up+0.5/次(累积) bad-0.5/次
+// 首页推荐流：读后端推荐 API（定时重算的缓存）
 // ============================================================
 
 const THEME_COLORS = {
@@ -20,7 +18,7 @@ const THEME_COLORS = {
   },
 };
 
-export default function Home() {
+export default function Home({ user, onLogout }) {
   // ---------- 主题 ----------
   const [themeChoice, setThemeChoice] = useState(() => localStorage.getItem('theme') || 'system');
   const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -55,46 +53,105 @@ export default function Home() {
   // ---------- 视图 / 搜索 / 数据 ----------
   const [activeNav, setActiveNav] = useState('首页');
   const [query, setQuery] = useState('');
-  const [movies, setMovies] = useState([]);       // 真实数据
+  const [movies, setMovies] = useState([]);
   const [total, setTotal] = useState(0);
+  const [recs, setRecs] = useState([]);          // 首页推荐（后端缓存）
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [nickname, setNickname] = useState('');
 
-  // 从后端拉数据：搜索词/视图切换时重新请求（useEffect 监听依赖）
+  // 登录后拉取用户信息 + 互动状态（恢复持久化）
   useEffect(() => {
-    let cancelled = false;  // 防止快速切换时旧响应覆盖新响应（竞态保护）
-    setLoading(true);
-    setError('');
-    fetchMovies({ q: query })
+    fetchMe().then((me) => { if (me.nickname) setNickname(me.nickname); }).catch(() => {});
+    fetchMyEvents()
       .then((data) => {
-        if (!cancelled) {
-          setMovies(data.items);
-          setTotal(data.total);
+        const l = [], f = [], up = {}, b = {};
+        for (const [midStr, acts] of Object.entries(data.events || {})) {
+          const mid = Number(midStr);
+          for (const [action, n] of Object.entries(acts)) {
+            if (action === 'like') l.push(mid);
+            else if (action === 'fav') f.push(mid);
+            else if (action === 'thumbs_up') up[mid] = n;
+            else if (action === 'bad') b[mid] = n;
+          }
         }
+        setLiked(l); setFavs(f); setLikes(up); setBads(b);
       })
-      .catch((e) => { if (!cancelled) setError(e.message); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };  // 清理函数：组件卸载/依赖变化时标记取消
+      .catch(() => {});
+  }, []);
+
+  // 首页 → 推荐 API；其他视图 → 电影 API
+  useEffect(() => {
+    let cancelled = false;
+    if (activeNav === '首页') {
+      setLoading(true); setError('');
+      fetchRecommendations(20)
+        .then((data) => { if (!cancelled) { setRecs(data); setLoading(false); } })
+        .catch((e) => { if (!cancelled) { setError(e.message); setLoading(false); } });
+    } else {
+      setLoading(true); setError('');
+      fetchMovies({ q: query, pageSize: 50 })
+        .then((data) => { if (!cancelled) { setMovies(data.items); setTotal(data.total); setLoading(false); } })
+        .catch((e) => { if (!cancelled) { setError(e.message); setLoading(false); } });
+    }
+    return () => { cancelled = true; };
   }, [query, activeNav]);
 
-  // 热门视图：按平均分降序（前端排序当前页；完整排序后续由后端/推荐引擎做）
   const viewList = activeNav === '热门'
     ? [...movies].sort((a, b) => (b.avg_rating ?? 0) - (a.avg_rating ?? 0))
-    : movies;
+    : activeNav === '首页' ? recs : movies;
 
-  // ---------- 互动状态（本地 mock，T6 接后端行为事件 API） ----------
-  const [liked, setLiked] = useState(user.liked);
+  // ---------- 互动状态（真实后端持久化） ----------
+  const [liked, setLiked] = useState([]);
   const [favs, setFavs] = useState([]);
   const [likes, setLikes] = useState({});
   const [bads, setBads] = useState({});
 
-  const toggleLike = (id) => setLiked(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  const toggleFav = (id) => setFavs(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  const bump = (setter, id, count) => setter(prev => ({ ...prev, [id]: count }));
-  const likeOnce = (id) => bump(setLikes, id, (likes[id] || 0) + 1);
-  const badOnce = (id) => bump(setBads, id, (bads[id] || 0) + 1);
+  // 互动操作：先乐观更新 UI，再调后端（失败回滚）
+  const toggleLike = async (id) => {
+    const isOn = liked.includes(id);
+    setLiked(prev => isOn ? prev.filter(x => x !== id) : [...prev, id]);
+    try {
+      if (isOn) await deleteEvents(id, 'like');
+      else await postEvent(id, 'like');
+    } catch (e) {
+      setLiked(prev => isOn ? [...prev, id] : prev.filter(x => x !== id));  // 回滚
+      alert(e.message);
+    }
+  };
+  const toggleFav = async (id) => {
+    const isOn = favs.includes(id);
+    setFavs(prev => isOn ? prev.filter(x => x !== id) : [...prev, id]);
+    try {
+      if (isOn) await deleteEvents(id, 'fav');
+      else await postEvent(id, 'fav');
+    } catch (e) {
+      setFavs(prev => isOn ? [...prev, id] : prev.filter(x => x !== id));
+      alert(e.message);
+    }
+  };
+  const bumpCount = (setter, id, cur) => {
+    const next = cur > 0 ? 0 : cur + 1;  // 点赞/差评：+1 累积，点已赞N归零
+    setter(prev => ({ ...prev, [id]: next }));
+    return next;
+  };
+  const onLikeCount = async (id) => {
+    const cur = likes[id] || 0;
+    bumpCount(setLikes, id, cur);
+    try {
+      if (cur > 0) await deleteEvents(id, 'thumbs_up');       // 归零
+      else await postEvent(id, 'thumbs_up');                   // +1
+    } catch (e) { setLikes(prev => ({ ...prev, [id]: cur })); alert(e.message); }
+  };
+  const onBadCount = async (id) => {
+    const cur = bads[id] || 0;
+    bumpCount(setBads, id, cur);
+    try {
+      if (cur > 0) await deleteEvents(id, 'bad');
+      else await postEvent(id, 'bad');
+    } catch (e) { setBads(prev => ({ ...prev, [id]: cur })); alert(e.message); }
+  };
 
-  // 最终星数 = 基础分(API avg_rating) + 互动加成
   const finalScore = (m) => {
     let s = m.avg_rating ?? 0;
     if (liked.includes(m.id)) s += 1.0;
@@ -105,12 +162,10 @@ export default function Home() {
   };
 
   const navItems = ['首页', '热门', '我的片单', '收藏', '设置'];
+  const myList = movies.filter(m => liked.includes(m.id));
+  const favList = movies.filter(m => favs.includes(m.id));
 
-  const myList = activeNav === '我的片单' ? movies.filter(m => liked.includes(m.id)) : [];
-  const favList = activeNav === '收藏' ? movies.filter(m => favs.includes(m.id)) : [];
-
-  // ---------- 设置页状态（mock，后续接后端） ----------
-  const [nickname, setNickname] = useState(user.name);
+  // ---------- 设置页状态 ----------
   const [pwdOld, setPwdOld] = useState('');
   const [pwdNew, setPwdNew] = useState('');
   const [pwdNew2, setPwdNew2] = useState('');
@@ -164,7 +219,7 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            <div style={{ fontSize: 11, color: colors.sub }}>{nickname}</div>
+            <div style={{ fontSize: 11, color: colors.sub }}>{nickname || user.username}</div>
           </div>
           <div onMouseDown={startDrag} style={{ position: 'absolute', top: 0, right: -3, width: 6, height: '100%', cursor: 'col-resize', zIndex: 10 }} />
         </aside>
@@ -198,10 +253,10 @@ export default function Home() {
         )}
 
         <div style={{ padding: '20px 28px 8px' }}>
-          <h1 style={{ fontSize: 22, margin: 0 }}>{activeNav}</h1>
+          <h1 style={{ fontSize: 22, margin: 0 }}>{activeNav === '首页' ? '为你推荐' : activeNav}</h1>
           {activeNav !== '设置' && (
             <p style={{ fontSize: 12, color: colors.sub, margin: '6px 0 0' }}>
-              {loading ? '加载中…' : error ? `加载失败：${error}` : `共 ${total} 部（真实数据）`}
+              {loading ? '加载中…' : error ? `加载失败：${error}` : activeNav === '首页' ? `个性化推荐（基于你的互动，每 5 分钟更新）` : `共 ${total} 部`}
             </p>
           )}
         </div>
@@ -229,10 +284,10 @@ export default function Home() {
                 <div style={{ fontSize: 12, color: colors.sub, marginBottom: 6 }}>账号</div>
                 <div style={{ background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 8, padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <div style={{ fontSize: 13 }}>
-                    {nickname} · 用户名 czx-beauty · 注册于 2026-08-18
+                    {nickname || user.username} · 用户名 {user.username}
                   </div>
                   <div style={{ fontSize: 13, color: colors.sub }}>
-                    喜欢 {liked.length} 部 · 收藏 {favs.length} 部 · 已看 165 部
+                    喜欢 {liked.length} 部 · 收藏 {favs.length} 部
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <input value={nickname} onChange={(e) => setNickname(e.target.value)}
@@ -245,7 +300,7 @@ export default function Home() {
                     <input type="password" value={pwdNew2} onChange={(e) => setPwdNew2(e.target.value)} placeholder="确认新密码" style={inputStyle(colors)} />
                     <button onClick={() => { setPwdOld(''); setPwdNew(''); setPwdNew2(''); mockSave('密码已修改（mock）'); }} style={btnStyle(colors)}>保存</button>
                   </div>
-                  <button onClick={() => mockSave('已退出登录（mock）')}
+                  <button onClick={() => { onLogout(); }}
                     style={{ alignSelf: 'flex-start', background: 'transparent', border: `1px solid ${colors.red}`, color: colors.red, borderRadius: 6, padding: '6px 14px', fontSize: 13, cursor: 'pointer' }}>
                     退出登录
                   </button>
@@ -267,7 +322,7 @@ export default function Home() {
             <div style={{ color: colors.red, padding: '40px 0', textAlign: 'center', fontSize: 14 }}>{error}</div>
           ) : (activeNav === '我的片单' && myList.length === 0) || (activeNav === '收藏' && favList.length === 0) ? (
             <div style={{ color: colors.sub, padding: '40px 0', textAlign: 'center', fontSize: 14 }}>
-              {activeNav === '我的片单' ? '还没有喜欢的电影（数据目前存本地，接后端后持久化）' : '还没有收藏的电影（数据目前存本地，接后端后持久化）'}
+              {activeNav === '我的片单' ? '还没有喜欢的电影' : '还没有收藏的电影'}
             </div>
           ) : (
             (activeNav === '我的片单' ? myList : activeNav === '收藏' ? favList : viewList).map(m => {
@@ -300,8 +355,8 @@ export default function Home() {
                   </span>
 
                   <div style={{ display: 'flex', gap: 4, width: 210, justifyContent: 'flex-end' }}>
-                    <ActBtn colors={colors} active={likeN > 0} onClick={() => likeN > 0 ? bump(setLikes, m.id, 0) : likeOnce(m.id)} label={likeN > 0 ? `已赞 ${likeN}` : '点赞'} />
-                    <ActBtn colors={colors} active={badN > 0} onClick={() => badN > 0 ? bump(setBads, m.id, 0) : badOnce(m.id)} label={badN > 0 ? `已差 ${badN}` : '差评'} />
+                    <ActBtn colors={colors} active={likeN > 0} onClick={() => onLikeCount(m.id)} label={likeN > 0 ? `已赞 ${likeN}` : '点赞'} />
+                    <ActBtn colors={colors} active={badN > 0} onClick={() => onBadCount(m.id)} label={badN > 0 ? `已差 ${badN}` : '差评'} />
                     <ActBtn colors={colors} active={isFav} onClick={() => toggleFav(m.id)} label={isFav ? '已收藏' : '收藏'} />
                     <ActBtn colors={colors} active={isLiked} onClick={() => toggleLike(m.id)} label={isLiked ? '已喜欢' : '喜欢'} />
                   </div>
