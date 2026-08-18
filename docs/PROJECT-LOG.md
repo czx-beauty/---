@@ -143,3 +143,25 @@ backend/
 3. 幂等脚本 = 跑 100 遍结果一样，这是工程化基本要求
 4. 密码绝不存明文（bcrypt 哈希）——安全红线
 5. 编辑器报「sqlalchemy 无法解析」是因为没指向 venv，用 `uv run` 执行即正常
+
+### T5 电影浏览 API（列表/搜索/筛选/详情）——详细过程
+
+**阶段目标**：让前端首页的电影流换成真实数据（9742 部）。4 个接口全部走通。
+
+**接口设计**（routers/movies.py）：
+| 接口 | 功能 | 首页对应 |
+|---|---|---|
+| GET /api/movies | 列表+分页（page/page_size）| 首页流 |
+| GET /api/movies?q= | 搜索（标题/类型，ILIKE 模糊）| 顶部搜索框 |
+| GET /api/movies?genre= | 类型筛选 | 分类浏览 |
+| GET /api/movies/{id} | 详情（含 avg_rating/rating_count 聚合）| 详情页 |
+
+**教学要点**：
+1. **ILIKE vs LIKE**：SQL 的 LIKE 大小写敏感，ILIKE 不敏感——用户搜「inception」能命中「Inception」
+2. **分页**：`offset + limit`，page/page_size 参数带校验（ge=1/le=100），防止恶意大分页
+3. **聚合查询**：`func.avg()/func.count()` 一次 SQL 算出平均分和人数，不用在 Python 里算
+4. **404 处理**：`HTTPException(status_code=404)` 是 REST 规范，前端能区分「没有」和「出错」
+5. **响应模型**：`response_model=` 声明返回形状，Pydantic 自动校验+序列化，还能在 Swagger 显示
+
+**验收结果**：
+- 列表 total=9742 ✅ / 搜索 inception 命中 1 部 ✅ / Sci-Fi 筛选 980 部 ✅ / 详情 Toy Story avg 4.38·147 人 ✅

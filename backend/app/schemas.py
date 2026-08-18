@@ -14,3 +14,16 @@ class MovieOut(BaseModel):
     genres: str
 
     model_config = {"from_attributes": True}  # 允许从 ORM 对象直接转换
+
+
+class MovieListOut(BaseModel):
+    total: int            # 符合条件的总数（前端可显示/分页）
+    items: list[MovieOut]
+
+
+class MovieDetailOut(BaseModel):
+    id: int
+    title: str
+    genres: str
+    avg_rating: float | None   # 数据集平均分（可空：没评分的新电影）
+    rating_count: int          # 评分人数

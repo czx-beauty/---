@@ -1,7 +1,7 @@
 """FastAPI 入口——装配应用、建表、挂路由"""
 from fastapi import FastAPI
 from app.database import Base, engine
-from app.routers import health
+from app.routers import health, movies
 import app.models  # noqa: F401  确保模型注册到 Base.metadata
 
 app = FastAPI(title="Movie Recommender API", version="0.1.0")
@@ -12,3 +12,4 @@ def create_tables():
     Base.metadata.create_all(bind=engine)
 
 app.include_router(health.router)
+app.include_router(movies.router)
