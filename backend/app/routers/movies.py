@@ -24,13 +24,15 @@ rating_agg = (
 
 
 def _to_movie_out(movie: Movie, agg_row) -> MovieOut:
-    """把电影 ORM + 聚合行组装成输出模型"""
+    """把电影 ORM + 聚合行组装成输出模型（agg_row 可能为 None = 该电影无人评分）"""
+    avg10 = agg_row.avg10 if agg_row is not None else None
+    cnt = agg_row.cnt if agg_row is not None else 0
     return MovieOut(
         id=movie.id,
         title=movie.title,
         genres=movie.genres,
-        avg_rating=round(agg_row.avg10, 2) if agg_row.avg10 is not None else None,
-        rating_count=agg_row.cnt or 0,
+        avg_rating=round(avg10, 2) if avg10 is not None else None,
+        rating_count=cnt or 0,
     )
 
 
