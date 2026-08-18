@@ -165,3 +165,37 @@ backend/
 
 **验收结果**：
 - 列表 total=9742 ✅ / 搜索 inception 命中 1 部 ✅ / Sci-Fi 筛选 980 部 ✅ / 详情 Toy Story avg 4.38·147 人 ✅
+
+### T9-前半：前端接真实数据（Vite 代理 + fetch + useEffect）
+
+**阶段目标**：首页电影流从 mock 12 部 → 真实 API 9742 部。
+
+**Step 1：后端列表接口带平均分**（避免 N+1）
+- 关键点：**N+1 问题**——如果列表 20 部电影每部都查一次评分聚合 = 21 次 SQL；用子查询+IN 一次查出 = 2 次 SQL
+- 实现：`rating_agg` 子查询（GROUP BY movie_id 算 avg×2 和 count）+ `.where(movie_id.in_(ids))` 批量取
+- 数据格式：数据集评分是 5 分制（0.5~5.0），×2 折算成 10 分制（保持 UI 风格）
+
+**Step 2：Vite 代理**（绕开 CORS 的工业级解法）
+- 前端 5173 请求 `/api/*` → vite.config.js 的 proxy 转发到 `localhost:8000`
+- 效果：浏览器只认识 5173，永远没有跨域问题；生产部署时反向代理（Nginx）做同样的事
+
+**Step 3：API client**（src/api.js）
+- fetch 封装：统一 base 路径 `/api`、JSON 头、错误处理（非 2xx 抛 Error 带后端 detail）
+- 导出 fetchMovies（q/genre/page/pageSize 参数化）供页面调用
+
+**Step 4：Home.jsx 数据化改造**
+- `useEffect` 请求数据，依赖 [query, activeNav]——搜索词/切视图自动重新请求
+- **竞态保护**：`cancelled` 标志 + 清理函数，防止快速输入时旧响应覆盖新响应
+- loading/error 三态渲染（加载中/失败/数据）
+- 热门视图：前端按 avg_rating 降序（当前页；完整排序后续交给推荐引擎）
+- 互动机制保留本地 state（T6 接行为事件 API 后持久化）
+
+**验收结果**：
+- 前端 5173 代理请求 → `{"total": 9742}`，Toy Story ★ 8.76 ✅
+- 搜索框实时查后端 ✅ / 每部显示「N 人评分」✅
+
+**教学要点**：
+1. **N+1 查询**是新手最容易犯的性能错误——记住「能用一次 SQL 绝不 N 次」
+2. **CORS**：浏览器安全策略，前后端同源（代理）是开发期标准解法
+3. **useEffect 竞态**：异步请求必须有取消保护，否则会出现「显示过期数据」的诡异 bug
+4. **5 分制 vs 10 分制**：数据格式转换要统一在 API 层做，前端永远只认一种格式

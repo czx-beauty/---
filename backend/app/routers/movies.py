@@ -10,6 +10,30 @@ from app.schemas import MovieDetailOut, MovieListOut, MovieOut
 router = APIRouter(prefix="/api/movies", tags=["movies"])
 
 
+# 评分聚合子查询：每个电影的平均分（5 分制）×2 → 10 分制，和评分人数
+# 用子查询一次算出，避免对每个电影单独查详情（N+1 问题）
+rating_agg = (
+    select(
+        Rating.movie_id,
+        (func.avg(Rating.rating) * 2).label("avg10"),
+        func.count(Rating.id).label("cnt"),
+    )
+    .group_by(Rating.movie_id)
+    .subquery()
+)
+
+
+def _to_movie_out(movie: Movie, agg_row) -> MovieOut:
+    """把电影 ORM + 聚合行组装成输出模型"""
+    return MovieOut(
+        id=movie.id,
+        title=movie.title,
+        genres=movie.genres,
+        avg_rating=round(agg_row.avg10, 2) if agg_row.avg10 is not None else None,
+        rating_count=agg_row.cnt or 0,
+    )
+
+
 @router.get("", response_model=MovieListOut)
 def list_movies(
     q: str | None = Query(None, description="搜索关键词（标题或类型）"),
@@ -18,7 +42,7 @@ def list_movies(
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    """电影列表：支持搜索 / 类型筛选 / 分页"""
+    """电影列表：支持搜索 / 类型筛选 / 分页，每部带平均分"""
     stmt = select(Movie)
     if q:
         # ILIKE = 大小写不敏感的模糊匹配（SQL 的 LIKE 是大小写敏感的）
@@ -30,11 +54,22 @@ def list_movies(
         stmt = stmt.where(Movie.genres.ilike(f"%{genre}%"))
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    items = db.scalars(
+    movies = db.scalars(
         stmt.offset((page - 1) * page_size).limit(page_size)
     ).all()
 
-    return MovieListOut(total=total, items=[MovieOut.model_validate(m) for m in items])
+    # 一次性查出这些电影的聚合分（IN 查询，避免 N+1）
+    if movies:
+        ids = [m.id for m in movies]
+        agg_rows = db.execute(
+            rating_agg.select().where(rating_agg.c.movie_id.in_(ids))
+        ).mappings().all()
+        agg_map = {r["movie_id"]: r for r in agg_rows}
+        items = [_to_movie_out(m, agg_map.get(m.id)) for m in movies]
+    else:
+        items = []
+
+    return MovieListOut(total=total, items=items)
 
 
 @router.get("/{movie_id}", response_model=MovieDetailOut)

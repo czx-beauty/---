@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { movies, user } from './mockData';
+import { fetchMovies } from './api';
+import { user } from './mockData';
 
 // ============================================================
-// 电影推荐 — 正式首页（从 prototype Variant D 定稿）
+// 电影推荐 — 正式首页（真实后端数据版）
 // 互动机制：喜欢+1.0(1次可取消) 收藏+0.5(1次可取消)
 //           点赞+0.5/次(可连续累积，点「已赞N」归零) 差评-0.5/次(同上)
-// 侧边栏：切换视图保持打开，仅「关闭」按钮收起，☰ 图标入口
-// 设置：外观/昵称/修改密码/退出登录/账号详情
+// 数据：/api/movies（Vite 代理到后端 8000）
 // ============================================================
 
 const THEME_COLORS = {
@@ -52,26 +52,51 @@ export default function Home() {
     window.addEventListener('mouseup', onUp);
   };
 
-  // ---------- 视图 / 搜索 ----------
+  // ---------- 视图 / 搜索 / 数据 ----------
   const [activeNav, setActiveNav] = useState('首页');
   const [query, setQuery] = useState('');
+  const [movies, setMovies] = useState([]);       // 真实数据
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  // ---------- 互动状态 ----------
+  // 从后端拉数据：搜索词/视图切换时重新请求（useEffect 监听依赖）
+  useEffect(() => {
+    let cancelled = false;  // 防止快速切换时旧响应覆盖新响应（竞态保护）
+    setLoading(true);
+    setError('');
+    fetchMovies({ q: query })
+      .then((data) => {
+        if (!cancelled) {
+          setMovies(data.items);
+          setTotal(data.total);
+        }
+      })
+      .catch((e) => { if (!cancelled) setError(e.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };  // 清理函数：组件卸载/依赖变化时标记取消
+  }, [query, activeNav]);
+
+  // 热门视图：按平均分降序（前端排序当前页；完整排序后续由后端/推荐引擎做）
+  const viewList = activeNav === '热门'
+    ? [...movies].sort((a, b) => (b.avg_rating ?? 0) - (a.avg_rating ?? 0))
+    : movies;
+
+  // ---------- 互动状态（本地 mock，T6 接后端行为事件 API） ----------
   const [liked, setLiked] = useState(user.liked);
   const [favs, setFavs] = useState([]);
-  const [likes, setLikes] = useState({});   // 点赞计数 {id: n}，可连续累积
-  const [bads, setBads] = useState({});     // 差评计数 {id: n}
+  const [likes, setLikes] = useState({});
+  const [bads, setBads] = useState({});
 
   const toggleLike = (id) => setLiked(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   const toggleFav = (id) => setFavs(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  // 点赞/差评：连续点 +1；点「已赞N/已差N」归零
   const bump = (setter, id, count) => setter(prev => ({ ...prev, [id]: count }));
   const likeOnce = (id) => bump(setLikes, id, (likes[id] || 0) + 1);
   const badOnce = (id) => bump(setBads, id, (bads[id] || 0) + 1);
 
-  // 最终星数 = 基础分 + 喜欢1.0 + 收藏0.5 + 点赞0.5×n - 差评0.5×n
+  // 最终星数 = 基础分(API avg_rating) + 互动加成
   const finalScore = (m) => {
-    let s = m.rating;
+    let s = m.avg_rating ?? 0;
     if (liked.includes(m.id)) s += 1.0;
     if (favs.includes(m.id)) s += 0.5;
     s += 0.5 * (likes[m.id] || 0);
@@ -81,16 +106,8 @@ export default function Home() {
 
   const navItems = ['首页', '热门', '我的片单', '收藏', '设置'];
 
-  const byQuery = (list) => list.filter(m =>
-    m.title.toLowerCase().includes(query.toLowerCase()) ||
-    m.genres.some(g => g.toLowerCase().includes(query.toLowerCase()))
-  );
-  let viewList = movies;
-  if (activeNav === '热门') viewList = [...movies].sort((a, b) => finalScore(b) - finalScore(a));
-  if (activeNav === '我的片单') viewList = movies.filter(m => liked.includes(m.id));
-  if (activeNav === '收藏') viewList = movies.filter(m => favs.includes(m.id));
-  const showSearch = activeNav !== '设置';
-  const list = showSearch ? byQuery(viewList) : [];
+  const myList = activeNav === '我的片单' ? movies.filter(m => liked.includes(m.id)) : [];
+  const favList = activeNav === '收藏' ? movies.filter(m => favs.includes(m.id)) : [];
 
   // ---------- 设置页状态（mock，后续接后端） ----------
   const [nickname, setNickname] = useState(user.name);
@@ -169,10 +186,10 @@ export default function Home() {
 
       {/* ===== 主内容区 ===== */}
       <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {showSearch && (
+        {activeNav !== '设置' && (
           <div style={{ padding: '14px 28px', borderBottom: `1px solid ${colors.border}`, background: colors.panel }}>
             <input value={query} onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索电影或类型"
+              placeholder="搜索电影或类型（实时查后端）"
               style={{
                 width: '100%', maxWidth: 420, background: colors.bg, color: colors.text,
                 border: `1px solid ${colors.border}`, borderRadius: 8, padding: '9px 14px', fontSize: 14, outline: 'none',
@@ -182,6 +199,11 @@ export default function Home() {
 
         <div style={{ padding: '20px 28px 8px' }}>
           <h1 style={{ fontSize: 22, margin: 0 }}>{activeNav}</h1>
+          {activeNav !== '设置' && (
+            <p style={{ fontSize: 12, color: colors.sub, margin: '6px 0 0' }}>
+              {loading ? '加载中…' : error ? `加载失败：${error}` : `共 ${total} 部（真实数据）`}
+            </p>
+          )}
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '10px 28px 60px' }}>
@@ -239,12 +261,16 @@ export default function Home() {
 
               {savedMsg && <div style={{ fontSize: 13, color: colors.red }}>{savedMsg}</div>}
             </div>
-          ) : list.length === 0 ? (
+          ) : loading ? (
+            <div style={{ color: colors.sub, padding: '40px 0', textAlign: 'center', fontSize: 14 }}>加载中…</div>
+          ) : error ? (
+            <div style={{ color: colors.red, padding: '40px 0', textAlign: 'center', fontSize: 14 }}>{error}</div>
+          ) : (activeNav === '我的片单' && myList.length === 0) || (activeNav === '收藏' && favList.length === 0) ? (
             <div style={{ color: colors.sub, padding: '40px 0', textAlign: 'center', fontSize: 14 }}>
-              {activeNav === '我的片单' ? '还没有喜欢的电影' : activeNav === '收藏' ? '还没有收藏的电影' : '没有匹配结果'}
+              {activeNav === '我的片单' ? '还没有喜欢的电影（数据目前存本地，接后端后持久化）' : '还没有收藏的电影（数据目前存本地，接后端后持久化）'}
             </div>
           ) : (
-            list.map(m => {
+            (activeNav === '我的片单' ? myList : activeNav === '收藏' ? favList : viewList).map(m => {
               const score = finalScore(m);
               const isLiked = liked.includes(m.id);
               const isFav = favs.includes(m.id);
@@ -260,9 +286,9 @@ export default function Home() {
                   <div style={{ width: 30, textAlign: 'center', color: colors.sub, fontSize: 13 }}>{m.id}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {m.title} <span style={{ color: colors.sub, fontWeight: 400, fontSize: 12 }}>{m.year}</span>
+                      {m.title} <span style={{ color: colors.sub, fontWeight: 400, fontSize: 12 }}>{m.rating_count ? `${m.rating_count} 人评分` : '暂无评分'}</span>
                     </div>
-                    <div style={{ fontSize: 12, color: colors.sub, marginTop: 2 }}>{m.genres.join(' · ')}</div>
+                    <div style={{ fontSize: 12, color: colors.sub, marginTop: 2 }}>{m.genres.replaceAll('|', ' · ')}</div>
                   </div>
 
                   <span style={{ fontSize: 14, color: colors.red, fontWeight: 700, width: 52, textAlign: 'right' }}>

@@ -12,6 +12,8 @@ class MovieOut(BaseModel):
     id: int
     title: str
     genres: str
+    avg_rating: float | None = None   # 数据集平均分（×2 折算 10 分制；没评分则 None）
+    rating_count: int = 0
 
     model_config = {"from_attributes": True}  # 允许从 ORM 对象直接转换
 
