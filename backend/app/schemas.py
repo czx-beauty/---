@@ -46,3 +46,19 @@ class TokenOut(BaseModel):
     token_type: str = "bearer"
     user_id: int
     username: str
+
+
+class EventCreate(BaseModel):
+    movie_id: int
+    action: str  # like / fav / thumbs_up / bad
+
+
+class EventOut(BaseModel):
+    movie_id: int
+    action: str
+    delta: float
+
+
+class MyEventsOut(BaseModel):
+    """当前用户的全部互动汇总：{movie_id: {action: count}}"""
+    events: dict[int, dict[str, int]]
