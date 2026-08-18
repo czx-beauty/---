@@ -29,3 +29,20 @@ class MovieDetailOut(BaseModel):
     genres: str
     avg_rating: float | None   # 数据集平均分（可空：没评分的新电影）
     rating_count: int          # 评分人数
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user_id: int
+    username: str

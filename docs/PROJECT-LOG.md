@@ -207,3 +207,27 @@ backend/
 - 教训 2：测试要覆盖「空数据」场景，不能只测「有数据」的 happy path
 - 修复：`agg_row is not None` 判空后取值
 - 顺手：后端启动加 `--reload`（改代码自动生效，开发期神器）
+
+### T4 认证 API（注册/登录/JWT）——详细过程
+
+**阶段目标**：用户体系落地——注册/登录/受保护接口，密码安全存储。
+
+**实现**（security.py + routers/auth.py）：
+1. **密码哈希**：passlib + bcrypt（`$2b$12$...` 格式），自动加盐，哈希不可逆
+2. **JWT**：登录/注册成功 → 签发 token（含 user_id/username/过期时间，HS256 签名）
+3. **受保护接口**：`Depends(get_current_user)` —— FastAPI 依赖注入，自动从 `Authorization: Bearer <token>` 提取并校验
+4. 安全细节：登录失败统一报「用户名或密码错误」（防用户名枚举）；伪造/过期 token 一律 401
+
+**🐛 大坑：passlib 1.7.4 + bcrypt 5.0 不兼容**
+- 现象：注册 500，日志 `ValueError: password cannot be longer than 72 bytes`
+- 根因：passlib 1.7.4（2020 停更）在 bcrypt 4.1+ 下自检崩溃（bcrypt 强制 72 字节密码上限，passlib 自检传超长字符串）
+- 修复：`uv add "bcrypt==4.0.1"` 降级（社区标准解法）
+- 教训：**passlib 已停更，新项目优先用 bcrypt 库直连**；依赖版本组合是隐形炸弹
+
+**🐛 大坑 2：pyproject.toml / uv.lock 丢失**
+- 现象：uv add 报「No pyproject.toml」
+- 根因：uv init 生成 pyproject.toml 时正值原型分支，切回 main 时被 git 带走（git 只跟踪 commit 过的文件）
+- 修复：`git checkout prototype/ui-variants -- backend/pyproject.toml backend/uv.lock` + `uv sync`
+- 教训：**项目的依赖清单文件（pyproject.toml/uv.lock/package.json）必须第一时间 commit 进 main**，它们是项目身份的一部分
+
+**验收**：注册 201 / 重复注册 400 / 登录 200 / /me 200 / 无token 401 / 密码错 401 / 伪造token 401 全部通过 ✅
