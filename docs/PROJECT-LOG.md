@@ -85,3 +85,61 @@
 - 原型（A/B/C/D 全变体）归档到分支 `prototype/ui-variants`（prototype 规则：原型进分支不进 main）
 - 踩坑：切回 main 时 prototype 分支已跟踪的 frontend 文件被 git 带走 → 从分支选择性恢复基础文件（package.json/index.html/vite.config.js/mockData.js）
 - main 提交 `720e609`：正式首页 + 互动星级机制
+
+### T3 后端骨架（PostgreSQL + FastAPI + 数据导入）——详细过程
+
+**阶段目标**：搭起企业级后端：数据库装/启动/建库 → ORM 建表 → FastAPI 路由 → CSV 数据导入。验收 = `/api/health` 返回电影数。
+
+**Step 1：装 PostgreSQL 16**（brew）
+- `brew install postgresql@16`（后台 ~1 分钟，装完自动 initdb 初始化数据集群）
+- `brew services start postgresql@16` 启动服务（开机自启）
+- `pg_isready` → `/tmp:5432 - 接受连接` ✅
+
+**Step 2：建用户和数据库**
+- `CREATE USER czx WITH PASSWORD 'czx'`（开发用简单密码；生产必须强密码+环境变量）
+- `CREATE DATABASE movie_recommender OWNER czx`
+- 连接串：`postgresql+psycopg://czx:czx@localhost:5432/movie_recommender`（存在 config.py）
+
+**Step 3：后端分层架构**（企业级铁律，每个 FastAPI 项目通用）
+```
+backend/
+├── pyproject.toml        # uv 依赖清单
+├── app/
+│   ├── main.py           # 入口：创建应用、startup 建表、挂路由
+│   ├── config.py         # 配置（pydantic-settings，环境变量可覆盖）
+│   ├── database.py       # 引擎 + 会话 + Base（SQLAlchemy 2.0 风格）
+│   ├── models.py         # ORM 模型 = 表结构
+│   ├── schemas.py        # Pydantic = API 输入输出形状
+│   └── routers/
+│       └── health.py     # 健康检查路由
+└── scripts/
+    └── import_data.py    # CSV → 数据库（幂等）
+```
+分层职责：models.py 管「怎么存」，schemas.py 管「收什么返什么」，routers 管「URL 业务」，main.py 只管装配。互不混淆。
+
+**Step 4：ORM 模型**（5 张表，对应 CONTEXT.md 领域词汇）
+| 表 | 领域词汇 | 说明 |
+|---|---|---|
+| users | 用户 | 注册登录，密码 bcrypt 哈希 |
+| movies | 电影 | movieId/title/genres（genres 用 | 分隔的字符串）|
+| ratings | 评分 | 数据集原始评分，**只导 >=4 的**（ADR-0001 二值化=喜欢信号）|
+| click_events | 行为事件 | 网站用户互动记录（like/fav/thumbs_up/bad + delta）|
+| rec_cache | 推荐缓存 | 定时重算的「用户→推荐列表」（JSON 字符串）|
+
+**Step 5：数据导入脚本**（幂等设计）
+- movies.csv 全量导入（9742 部）；ratings.csv 10 万条中只保留 >=4 分的 48580 条
+- 幂等：先查已存在的 movieId 再插，重复跑不重复
+- 分批提交（5000 条/批），避免内存爆炸
+- 运行：`uv run python scripts/import_data.py`
+
+**Step 6：验收结果**
+- 导入：`movies: 新增 9742 部`、`ratings: 保留 >=4 分 48580 条` ✅
+- `/api/health` → `{"status":"ok","movie_count":9742}` ✅
+- `/docs` Swagger 自动文档 ✅（FastAPI 白送）
+
+**教学要点**：
+1. ORM（SQLAlchemy）让你用 Python 对象操作数据库，不用手写 SQL；但底层还是 SQL
+2. Pydantic 负责 API 数据校验和序列化，和 ORM 分离是标准做法
+3. 幂等脚本 = 跑 100 遍结果一样，这是工程化基本要求
+4. 密码绝不存明文（bcrypt 哈希）——安全红线
+5. 编辑器报「sqlalchemy 无法解析」是因为没指向 venv，用 `uv run` 执行即正常
